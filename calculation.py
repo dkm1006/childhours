@@ -46,6 +46,7 @@ def calculate_datetime_values(df):
     df['date'] = df['start'].dt.date
     df['month'] = df['start'].dt.month
     df['weekday'] = df['start'].dt.weekday
+    df['year'] = df['start'].dt.year
     return df
 
 def quarter_hours(dt_series: pd.Series):
@@ -77,13 +78,18 @@ def calculate_effort(df):
 def calculate_overall_statistics(df):
     # Calculate total share per parent
     total_duration = df['duration'].sum()
-    duration_by_responsible = df.groupby('responsible')['duration'].sum()
+    duration_by_responsible = df.groupby('responsible')['duration'].sum().dt.total_seconds() / S_PER_H
+    max_responsible = duration_by_responsible.iloc[duration_by_responsible.argmax()]
+    min_responsible = duration_by_responsible.iloc[duration_by_responsible.argmin()]
+    shared_responsible = total_duration.total_seconds() / S_PER_H - max_responsible - min_responsible
+    diff_as_percent_of_min_responsible_share = (max_responsible + shared_responsible) / (min_responsible + shared_responsible) - 1
     total_effort = df['effort'].sum()
     total_share = (df['effort'] * df['share_0']).sum() / total_effort
     return {
         'total_duration': total_duration,
         'total_effort': total_effort,
-        'total_share': total_share
+        'total_share': total_share,
+        'difference_between_parents': max_responsible - min_responsible
     }
 
 def calculate_effort_distributions(df):
@@ -115,10 +121,16 @@ def calculate_daily_effort_matrix(df: pd.DataFrame):
     daily_effort_df['intensity'] = daily_total_efforts / daily_total_efforts.max()
     daily_effort_df['weekday'] = pd.to_datetime(daily_effort_df.index).weekday
     daily_effort_df['month'] = pd.to_datetime(daily_effort_df.index).month
+    daily_effort_df['year'] = pd.to_datetime(daily_effort_df.index).year
     daily_effort_df['week'] = pd.to_datetime(daily_effort_df.index).isocalendar().week
-    # To avoid problems with non-unique index add 52 to new year's first week
+    # Deal with problems with non-unique index 
+    min_year = daily_effort_df['year'].min()
+    max_week = daily_effort_df['week'].max()
+    daily_effort_df['week'] += max_week * (daily_effort_df['year'] - min_year)
+    # Deal with special case of new year's first week
     first_week_new_year = (daily_effort_df['month'] == 12) & (daily_effort_df['week'] == 1)
-    daily_effort_df.loc[first_week_new_year, 'week'] = daily_effort_df['week'].max() + 1
+    daily_effort_df.loc[first_week_new_year, 'week'] += max_week
+
     effort_matrix = daily_effort_df.pivot(index='week', columns='weekday', values=['share', 'intensity']).fillna(0)
     return effort_matrix
 
@@ -138,10 +150,16 @@ def calculate_quarter_hour_effort_matrix(df: pd.DataFrame):
         quarter_hour_efforts[quarter] = effort
         quarter_hour_shares[quarter] = share
 
-    num_weeks = 52
+    num_weeks = (df.start.max() - df.start.min()).days // 7
     max_factor = 2
     normed_quarter_hour_efforts = quarter_hour_efforts / num_weeks / max_factor
     return normed_quarter_hour_efforts.fillna(0), quarter_hour_shares.fillna(0)
+
+
+def date_from_day_of_year(day_of_year: int, year: int = datetime.now().year):
+    result_date = datetime(year, 1, 1) + timedelta(days=day_of_year - 1)
+    return result_date
+
 
 # fig = plot_heatmap(quarter_hour_efforts.fillna(0))
 # fig.show()
